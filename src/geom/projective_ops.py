@@ -1,5 +1,5 @@
+import pypose as pp
 import torch
-from lietorch import SE3, Sim3
 
 MIN_DEPTH = 0.2
 
@@ -27,7 +27,7 @@ def iproj(disps, intrinsics, jacobian=False):
     """ pinhole camera inverse projection """
     ht, wd = disps.shape[-2:]
     device = disps.device
-    fx, fy, cx, cy = extract_intrinsics(intrinsics) # [..., N, 1, 1]
+    fx, fy, cx, cy = extract_intrinsics(intrinsics)  # [..., N, 1, 1]
 
     y, x = torch.meshgrid(
         torch.arange(ht).to(device).float(),
@@ -62,27 +62,26 @@ def actp(Gij, X0, jacobian=False):
         o = torch.zeros_like(d)
         B, N, H, W = d.shape
 
-        if isinstance(Gij, SE3):
+        if isinstance(Gij, pp.SE3_type):
             Ja = torch.stack([
-                d, o, o,  o,  Z, -Y,
-                o, d, o, -Z,  o,  X,
-                o, o, d,  Y, -X,  o,
-                o, o, o,  o,  o,  o,
+                d, o, o, o, Z, -Y,
+                o, d, o, -Z, o, X,
+                o, o, d, Y, -X, o,
+                o, o, o, o, o, o,
             ], dim=-1).view(B, N, H, W, 4, 6)
 
-        elif isinstance(Gij, Sim3):
+        elif isinstance(Gij, pp.Sim3_type):
             Ja = torch.stack([
-                d, o, o,  o,  Z, -Y, X,
-                o, d, o, -Z,  o,  X, Y,
-                o, o, d,  Y, -X,  o, Z,
-                o, o, o,  o,  o,  o, o,
+                d, o, o, o, Z, -Y, X,
+                o, d, o, -Z, o, X, Y,
+                o, o, d, Y, -X, o, Z,
+                o, o, o, o, o, o, o,
 
             ], dim=-1).view(B, N, H, W, 4, 7)
         else:
             raise TypeError(type(Gij))
 
     return X1, Ja
-
 
 
 def proj(Xs, intrinsics, jacobian=False, return_depth=False):
@@ -104,8 +103,8 @@ def proj(Xs, intrinsics, jacobian=False, return_depth=False):
         B, N, H, W = Z.shape
         o = torch.zeros_like(Z)
         proj_jac = torch.stack([
-            fx/Z,    o, -(fx/Z)*(X/Z), o,
-               o, fy/Z, -(fy/Z)*(Y/Z), o,
+            fx / Z, o, -(fx / Z) * (X / Z), o,
+            o, fy / Z, -(fy / Z) * (Y / Z), o,
         ], dim=-1).view(B, N, H, W, 2, 4)
 
     return coords, proj_jac
@@ -120,9 +119,9 @@ def projective_transform(poses, depths, intrinsics, ii, jj, jacobian=False, retu
     # X0: [batch, N, h, w, 4], 4: x, y, 1, d; Jz: [batch, N, h, w, 4], 4: 0, 0, 0, 1
 
     # poses: SE3, [batch, num, 7]; Gij: SE3, [batch, N, 7]
-    Gij = poses[:, jj] * poses[:, ii].inv()
-    Gij.data[:, ii==jj] = torch.tensor([-0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0], device=Gij.device)
-    X1, Ja = actp(Gij, X0, jacobian=jacobian) # X1: [batch, N, h, w, 4], Ja: [batch, N, h, w, 4, 6]
+    Gij = poses[:, jj] * poses[:, ii].Inv()
+    Gij.tensor()[:, ii == jj] = torch.tensor([-0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0], device=Gij.device)
+    X1, Ja = actp(Gij, X0, jacobian=jacobian)  # X1: [batch, N, h, w, 4], Ja: [batch, N, h, w, 4, 6]
 
     # project (pinhole), x1: [batch, N, h, w, 2/3], 2: x, y, 3: x, y, z, Jp: [batch, N, h, w, 2, 4]
     x1, Jp = proj(X1, intrinsics[:, jj], jacobian=jacobian, return_depth=return_depth)
@@ -142,6 +141,3 @@ def projective_transform(poses, depths, intrinsics, ii, jj, jacobian=False, retu
         return x1, valid, (Ji, Jj, Jz)
 
     return x1, valid
-
-
-

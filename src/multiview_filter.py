@@ -1,9 +1,9 @@
+import droid_backends
+import pypose as pp
 import torch
 import torch.nn as nn
-import droid_backends
-from lietorch import SE3
-from colorama import Fore, Style
 import torch.nn.functional as F
+from colorama import Fore, Style
 
 
 class MultiviewFilter(nn.Module):
@@ -15,7 +15,8 @@ class MultiviewFilter(nn.Module):
         self.device = args.device
         self.warmup = cfg['tracking']['warmup']
         self.filter_thresh = cfg['tracking']['multiview_filter']['thresh']  # dpeth error < 0.01m
-        self.filter_visible_num = cfg['tracking']['multiview_filter']['visible_num']  # points viewed by at least 3 cameras
+        self.filter_visible_num = cfg['tracking']['multiview_filter'][
+            'visible_num']  # points viewed by at least 3 cameras
         self.kernel_size = cfg['tracking']['multiview_filter']['kernel_size']  # 3
         self.bound_enlarge_scale = cfg['tracking']['multiview_filter']['bound_enlarge_scale']
         self.net = slam.net
@@ -105,9 +106,9 @@ class MultiviewFilter(nn.Module):
                 disps = torch.index_select(self.video.disps_up.detach(), dim=0, index=dirty_index)
                 common_intrinsic_id = 0  # we assume the intrinsics are the same within one scene
                 intrinsic = self.video.intrinsics[common_intrinsic_id].detach() * self.video.scale_factor
-                w2w = SE3(self.video.pose_compensate[0].clone().unsqueeze(dim=0)).to(self.device)
+                w2w = pp.SE3(self.video.pose_compensate[0].clone().unsqueeze(dim=0)).to(self.device)
 
-            points = droid_backends.iproj((w2w * SE3(poses).inv()).data, disps, intrinsic).cpu() # [b, h, w 3]
+            points = droid_backends.iproj((w2w @ pp.SE3(poses).Inv()).tensor(), disps, intrinsic).cpu()  # [b, h, w 3]
             thresh = self.filter_thresh * torch.ones_like(disps.mean(dim=[1, 2]))
             count = droid_backends.depth_filter(
                 poses, disps, intrinsic, dirty_index, thresh
@@ -121,7 +122,7 @@ class MultiviewFilter(nn.Module):
             if masks.sum() < 100:
                 return
             sel_points = points.reshape(-1, 3)[masks.reshape(-1)]
-            bound = self.get_bound_from_pointcloud(sel_points) # [3, 2]
+            bound = self.get_bound_from_pointcloud(sel_points)  # [3, 2]
 
             if isinstance(self.kernel_size, str) and self.kernel_size == 'inf':
                 extended_masks = torch.ones_like(masks).bool()
@@ -135,7 +136,7 @@ class MultiviewFilter(nn.Module):
                     masks.unsqueeze(dim=1).float(),
                     weight=torch.ones(1, 1, kernel, kernel, dtype=torch.float, device=masks.device),
                     stride=1,
-                    padding=kernel//2,
+                    padding=kernel // 2,
                     bias=None,
                 ).bool().squeeze(dim=1)  # [b, h, w]
 
@@ -146,7 +147,7 @@ class MultiviewFilter(nn.Module):
             extended_masks[extended_masks.clone()] = in_bound_mask
 
             sel_points = points.reshape(-1, 3)[extended_masks.reshape(-1)]
-            bound = self.get_bound_from_pointcloud(sel_points) # [3, 2]
+            bound = self.get_bound_from_pointcloud(sel_points)  # [3, 2]
 
             priority = self.pose_dist(self.video.poses_filtered[:cur_t].detach(), poses)
 
@@ -164,8 +165,8 @@ class MultiviewFilter(nn.Module):
             prefix += f'[{bd[1][0]:.1f}, {bd[1][1]:.1f}], '
             prefix += f'[{bd[2][0]:.1f}, {bd[2][1]:.1f}]]!'
             print(Fore.CYAN)
-            print(f'\n\n Multiview filtering: previous at {filtered_t}, now at {cur_t}, {masks.sum()} valid points found! {prefix}\n')
+            print(
+                f'\n\n Multiview filtering: previous at {filtered_t}, now at {cur_t}, {masks.sum()} valid points found! {prefix}\n')
             print(Style.RESET_ALL)
             del points, masks, poses, disps
             torch.cuda.empty_cache()
-

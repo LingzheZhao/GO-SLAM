@@ -1,6 +1,9 @@
 *.zip
 output
+outputs
+data
 .vscode
+.idea
 # 3rdparty
 Datasets
 SUMMARY

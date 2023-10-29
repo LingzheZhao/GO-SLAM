@@ -1,8 +1,7 @@
-import torch
-import lietorch
 import droid_backends
+import pypose as pp
+import torch
 from copy import deepcopy
-
 from torch.multiprocessing import Value
 
 from .droid_net import cvx_upsample
@@ -11,7 +10,7 @@ from .geom import projective_ops as pops
 
 class DepthVideo:
     def __init__(self, cfg, args):
-        self.cfg =cfg
+        self.cfg = cfg
         self.args = args
 
         # current keyframe count
@@ -42,16 +41,16 @@ class DepthVideo:
         self.red = torch.zeros(buffer, device=device, dtype=torch.bool).share_memory_()
         self.poses = torch.zeros(buffer, 7, device=device, dtype=torch.float).share_memory_()  # w2c quaterion
         self.poses_gt = torch.zeros(buffer, 4, 4, device=device, dtype=torch.float).share_memory_()  # c2w matrix
-        self.disps = torch.ones(buffer, ht//s, wd//s, device=device, dtype=torch.float).share_memory_()
-        self.disps_sens = torch.zeros(buffer, ht//s, wd//s, device=device, dtype=torch.float).share_memory_()
+        self.disps = torch.ones(buffer, ht // s, wd // s, device=device, dtype=torch.float).share_memory_()
+        self.disps_sens = torch.zeros(buffer, ht // s, wd // s, device=device, dtype=torch.float).share_memory_()
         self.depths_gt = torch.zeros(buffer, ht, wd, device=device, dtype=torch.float).share_memory_()
         self.disps_up = torch.zeros(buffer, ht, wd, device=device, dtype=torch.float).share_memory_()
         self.intrinsics = torch.zeros(buffer, 4, device=device, dtype=torch.float).share_memory_()
 
         ### feature attributes ###
-        self.fmaps = torch.zeros(buffer, c, 128, ht//s, wd//s, dtype=torch.half, device=device).share_memory_()
-        self.nets = torch.zeros(buffer, 128, ht//s, wd//s, dtype=torch.half, device=device).share_memory_()
-        self.inps = torch.zeros(buffer, 128, ht//s, wd//s, dtype=torch.half, device=device).share_memory_()
+        self.fmaps = torch.zeros(buffer, c, 128, ht // s, wd // s, dtype=torch.half, device=device).share_memory_()
+        self.nets = torch.zeros(buffer, 128, ht // s, wd // s, dtype=torch.half, device=device).share_memory_()
+        self.inps = torch.zeros(buffer, 128, ht // s, wd // s, dtype=torch.half, device=device).share_memory_()
 
         ### initialize poses to identity transformation
         self.poses[:] = torch.tensor([0, 0, 0, 0, 0, 0, 1], dtype=torch.float, device=device)
@@ -69,7 +68,6 @@ class DepthVideo:
         ### pose compensation from vitural to real
         self.pose_compensate = torch.zeros(1, 7, dtype=torch.float, device=device).share_memory_()
         self.pose_compensate[:] = torch.tensor([0, 0, 0, 0, 0, 0, 1], dtype=torch.float, device=device)
-
 
     def get_lock(self):
         return self.counter.get_lock()
@@ -89,7 +87,6 @@ class DepthVideo:
         self.timestamp[index] = item[0]
         self.images[index] = item[1]
 
-
         if item[2] is not None:
             self.poses[index] = item[2]
 
@@ -99,7 +96,7 @@ class DepthVideo:
         if item[4] is not None:
             self.depths_gt[index] = item[4]
             depth = item[4][..., 3::8, 3::8]
-            self.disps_sens[index] = torch.where(depth>0, 1.0/depth, depth)
+            self.disps_sens[index] = torch.where(depth > 0, 1.0 / depth, depth)
             self.disps[index] = self.disps_sens[index].clone()
 
         if item[5] is not None:
@@ -140,8 +137,8 @@ class DepthVideo:
         return item
 
     def append(self, *item):
-         with self.get_lock():
-             self.__item_setter(self.counter.value, item)
+        with self.get_lock():
+            self.__item_setter(self.counter.value, item)
 
     def get_bound(self):
         with self.mapping.get_lock():
@@ -159,8 +156,8 @@ class DepthVideo:
             est_depth = 1.0 / (est_disp + 1e-7)
 
             # origin alignment
-            w2c = lietorch.SE3(self.poses_filtered[index].clone()).to(device) # Tw(droid)_to_c
-            c2w = lietorch.SE3(self.pose_compensate[0].clone()).to(w2c.device) * w2c.inv()
+            w2c = pp.SE3(self.poses_filtered[index].clone()).to(device)  # Tw(droid)_to_c
+            c2w = pp.SE3(self.pose_compensate[0].clone()).to(w2c.device) * w2c.Inv()
             c2w = c2w.matrix()  # [4, 4]
 
             gt_c2w = self.poses_gt[index].clone().to(device)  # [4, 4]
@@ -192,7 +189,7 @@ class DepthVideo:
         return ii, jj
 
     def upsample(self, ix, mask):
-        disps_up = cvx_upsample(self.disps[ix].unsqueeze(dim=-1), mask) # [b, h, w, 1]
+        disps_up = cvx_upsample(self.disps[ix].unsqueeze(dim=-1), mask)  # [b, h, w, 1]
         self.disps_up[ix] = disps_up.squeeze()  # [b, h, w]
 
     def normalize(self):
@@ -207,7 +204,7 @@ class DepthVideo:
     def reproject(self, ii, jj):
         """ project points from ii -> jj """
         ii, jj = DepthVideo.format_indices(ii, jj, self.device)
-        Gs = lietorch.SE3(self.poses[None, ...])
+        Gs = pp.SE3(self.poses[None, ...])
 
         coords, valid_mask = pops.projective_transform(
             poses=Gs, depths=self.disps[None, ...], intrinsics=self.intrinsics[None, ...],
@@ -267,4 +264,3 @@ class DepthVideo:
                               target, weight, eta, ii, jj, t0, t1, iters, lm, ep, motion_only)
 
             self.disps.clamp_(min=0.001)
-

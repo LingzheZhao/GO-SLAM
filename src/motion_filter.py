@@ -1,5 +1,5 @@
+import pypose as pp
 import torch
-import lietorch
 
 from .geom import projective_ops as pops
 from .modules.corr import CorrBlock
@@ -7,6 +7,7 @@ from .modules.corr import CorrBlock
 
 class MotionFilter:
     """ This class is used to filter incoming frames and extract features """
+
     def __init__(self, net, video, thresh=2.5, device='cuda:0'):
         # split net modules
         self.cnet = net.cnet
@@ -42,7 +43,7 @@ class MotionFilter:
         """ main update operation - run on every frame in video """
 
         scale_factor = 8.0
-        IdentityMat = lietorch.SE3.Identity(1, ).data.squeeze()
+        IdentityMat = pp.identity_SE3(1).tensor().squeeze()
 
         batch, _, imh, imw = image.shape
         ht = imh // scale_factor
@@ -53,20 +54,21 @@ class MotionFilter:
         inputs = inputs.sub_(self.MEAN).div_(self.STDV)
 
         # extract features
-        gmap = self.__feature_encoder(inputs) # [b, c, imh//8, imw//8]
+        gmap = self.__feature_encoder(inputs)  # [b, c, imh//8, imw//8]
 
         ### always add frist frame to the depth video ###
-        left_idx = 0 # i.e., left image, for stereo case, we only store the hidden or input of left image
+        left_idx = 0  # i.e., left image, for stereo case, we only store the hidden or input of left image
         if self.video.counter.value == 0:
-            net, inp = self.__context_encoder(inputs[:, [left_idx,]])  # [1, 128, imh//8, imw//8]
+            net, inp = self.__context_encoder(inputs[:, [left_idx, ]])  # [1, 128, imh//8, imw//8]
             self.net, self.inp, self.fmap = net, inp, gmap
             self.video.append(timestamp, image[left_idx], IdentityMat, 1.0, depth,
-                              intrinsic/scale_factor, gmap, net[left_idx], inp[left_idx], gt_pose)
+                              intrinsic / scale_factor, gmap, net[left_idx], inp[left_idx], gt_pose)
 
         ### only add new frame if there is enough motion ###
         else:
             coords0 = pops.coords_grid(ht, wd, device=self.device)[None, None]  # [1, 1, imh//8, imw//8, 2]
-            corr = CorrBlock(self.fmap[None, [left_idx]], gmap[None, [left_idx]])(coords0)  # [1, 1, 4*49, imh//8, imw//8]
+            corr = CorrBlock(self.fmap[None, [left_idx]], gmap[None, [left_idx]])(
+                coords0)  # [1, 1, 4*49, imh//8, imw//8]
 
             # approximate flow magnitude using 1 update iteration
             _, delta, weight = self.update(self.net[None], self.inp[None], corr)  # [1, 1, imh//8, imw//8, 2]
@@ -77,7 +79,7 @@ class MotionFilter:
                 net, inp = self.__context_encoder(inputs[:, [left_idx]])  # [1, 128, imh//8, imw//8]
                 self.net, self.inp, self.fmap = net, inp, gmap
                 self.video.append(timestamp, image[left_idx], None, None, depth,
-                                  intrinsic/scale_factor, gmap, net[left_idx], inp[left_idx], gt_pose)
+                                  intrinsic / scale_factor, gmap, net[left_idx], inp[left_idx], gt_pose)
 
             else:
                 self.count += 1

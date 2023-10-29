@@ -1,26 +1,26 @@
-import os
 import numpy as np
+import os
+import pypose as pp
 import torch
-import torch.nn as nn
-from colorama import Fore, Style
-from collections import OrderedDict
-from tqdm import tqdm
-from lietorch import SE3
-from time import gmtime, strftime, time, sleep
 import torch.multiprocessing as mp
+import torch.nn as nn
+from collections import OrderedDict
+from colorama import Fore, Style
+from time import gmtime, strftime, time, sleep
+from tqdm import tqdm
 
-from .droid_net import DroidNet
-from .frontend import Frontend
+from .InstantNeuS import InstantNeuS
 from .backend import Backend
 from .depth_video import DepthVideo
+from .droid_net import DroidNet
+from .frontend import Frontend
+from .mapping import Mapper
+from .mesher import Mesher
 from .motion_filter import MotionFilter
 from .multiview_filter import MultiviewFilter
-from .visualization import droid_visualization
-from .trajectory_filler import PoseTrajectoryFiller
-from .mapping import Mapper
 from .render import Renderer
-from .mesher import Mesher
-from .InstantNeuS import InstantNeuS
+from .trajectory_filler import PoseTrajectoryFiller
+from .visualization import droid_visualization
 
 
 class Tracker(nn.Module):
@@ -43,7 +43,6 @@ class Tracker(nn.Module):
 
     def forward(self, timestamp, image, depth, intrinsic, gt_pose=None):
         with torch.no_grad():
-
             ### check there is enough motion
             self.motion_filter.track(timestamp, image, depth, intrinsic, gt_pose=gt_pose)
 
@@ -77,13 +76,12 @@ class BundleAdjustment(nn.Module):
         t = cur_t
 
         if cur_t > self.frontend_window:
-
             t_start = 0
             now = f'{strftime("%Y-%m-%d %H:%M:%S", gmtime())} - Full BA'
             msg = f'\n\n {now} : [{t_start}, {t}]; Current Keyframe is {cur_t}, last is {self.last_t}.'
 
             self.backend.dense_ba(t_start=t_start, t_end=t, steps=6, motion_only=False)
-            self.info(msg+'\n')
+            self.info(msg + '\n')
 
             self.last_t = cur_t
 
@@ -210,7 +208,7 @@ class SLAM:
     def tracking(self, rank, stream):
         print('Tracking Triggered!')
         self.all_trigered += 1
-        while(self.all_trigered < self.num_running_thread):
+        while (self.all_trigered < self.num_running_thread):
             pass
         for (timestamp, image, depth, intrinsic, gt_pose) in tqdm(stream):
             if self.mode != 'rgbd':
@@ -220,7 +218,7 @@ class SLAM:
             # predict mesh every 50 frames for video making
             if timestamp % 50 == 0 and timestamp > 0 and self.make_video:
                 self.hang_on[:] = 1
-            while(self.hang_on > 0):
+            while (self.hang_on > 0):
                 sleep(1.0)
 
         self.tracking_finished += 1
@@ -229,8 +227,8 @@ class SLAM:
     def optimizing(self, rank, dont_run=False):
         print('Full Bundle Adjustment Triggered!')
         self.all_trigered += 1
-        while(self.tracking_finished < 1 and not dont_run):
-            while(self.hang_on > 0 and self.make_video):
+        while (self.tracking_finished < 1 and not dont_run):
+            while (self.hang_on > 0 and self.make_video):
                 sleep(1.0)
             self.ba()
 
@@ -243,8 +241,8 @@ class SLAM:
     def multiview_filtering(self, rank, dont_run=False):
         print('Multiview Filtering Triggered!')
         self.all_trigered += 1
-        while((self.tracking_finished < 1 or self.optimizing_finished < 1) and not dont_run):
-            while(self.hang_on > 0 and self.make_video):
+        while ((self.tracking_finished < 1 or self.optimizing_finished < 1) and not dont_run):
+            while (self.hang_on > 0 and self.make_video):
                 sleep(1.0)
             self.multiview_filter()
 
@@ -253,8 +251,8 @@ class SLAM:
     def mapping(self, rank, dont_run=False):
         print('Dense Mapping Triggered!')
         self.all_trigered += 1
-        while(self.tracking_finished < 1 and not dont_run):
-            while(self.hang_on > 0 and self.make_video):
+        while (self.tracking_finished < 1 and not dont_run):
+            while (self.hang_on > 0 and self.make_video):
                 sleep(1.0)
             self.mapper()
 
@@ -268,8 +266,8 @@ class SLAM:
     def meshing(self, rank, dont_run=False):
         print('Meshing Triggered!')
         self.all_trigered += 1
-        while(self.mapping_finished < 1 and (not dont_run)):
-            while(self.hang_on < 1 and self.mapping_finished < 1 and self.make_video):
+        while (self.mapping_finished < 1 and (not dont_run)):
+            while (self.hang_on < 1 and self.mapping_finished < 1 and self.make_video):
                 sleep(1.0)
             self.mesher()
             self.hang_on[:] = 0
@@ -280,7 +278,7 @@ class SLAM:
     def visualizing(self, rank, dont_run=False):
         print('Visualization Triggered!')
         self.all_trigered += 1
-        while((self.tracking_finished < 1 or self.optimizing_finished < 1) and (not dont_run)):
+        while ((self.tracking_finished < 1 or self.optimizing_finished < 1) and (not dont_run)):
             droid_visualization(self.video, device=self.device, save_root=self.output)
 
         self.visualizing_finished += 1
@@ -289,7 +287,7 @@ class SLAM:
     def terminate(self, rank, stream=None):
         """ fill poses for non-keyframe images and evaluate """
 
-        while(self.optimizing_finished < 1):
+        while (self.optimizing_finished < 1):
             if self.num_running_thread == 1 and self.tracking_finished > 0:
                 break
 
@@ -308,17 +306,17 @@ class SLAM:
             from evo.core.trajectory import PosePath3D
             import numpy as np
 
-            print("#"*20 + f" Results for {stream.input_folder} ...")
+            print("#" * 20 + f" Results for {stream.input_folder} ...")
 
             timestamps = [i for i in range(len(stream))]
             camera_trajectory = self.traj_filler(stream)  # w2cs
-            w2w = SE3(self.video.pose_compensate[0].clone().unsqueeze(dim=0)).to(camera_trajectory.device)
-            camera_trajectory =  w2w * camera_trajectory.inv()
-            traj_est = camera_trajectory.data.cpu().numpy()
-            estimate_c2w_list = camera_trajectory.matrix().data.cpu()
+            w2w = pp.SE3(self.video.pose_compensate[0].clone().unsqueeze(dim=0)).to(camera_trajectory.device)
+            camera_trajectory = w2w * camera_trajectory.Inv()
+            traj_est = camera_trajectory.tensor().cpu().numpy()
+            estimate_c2w_list = camera_trajectory.matrix().cpu()
             np.save(
                 f'{self.output}/checkpoints/est_poses.npy',
-                  estimate_c2w_list.numpy(), # c2ws
+                estimate_c2w_list.numpy(),  # c2ws
             )
 
             traj_ref = []
@@ -331,7 +329,7 @@ class SLAM:
                             str = f'{tm:.9f}'
                             for ps in pos:  # timestamp tx ty tz qx qy qz qw
                                 str += f' {ps:.14f}'
-                            fp.write(str+'\n')
+                            fp.write(str + '\n')
                     print('Poses are save to {}!'.format(submission_txt))
 
                 print("Terminate: no GT poses found!")
@@ -350,25 +348,25 @@ class SLAM:
                 gt_c2w_list = torch.from_numpy(np.stack(traj_ref, axis=0))
 
                 traj_est = PoseTrajectory3D(
-                    positions_xyz=traj_est[:,:3],
-                    orientations_quat_wxyz=traj_est[:,3:],
+                    positions_xyz=traj_est[:, :3],
+                    orientations_quat_wxyz=traj_est[:, 3:],
                     timestamps=np.array(timestamps))
 
-                traj_ref =PosePath3D(poses_se3=traj_ref)
+                traj_ref = PosePath3D(poses_se3=traj_ref)
 
                 result = main_ape.ape(traj_ref, traj_est, est_name='traj',
                                       pose_relation=PoseRelation.translation_part, align=True, correct_scale=True)
 
-                out_path=f'{self.output}/metrics_traj.txt'
+                out_path = f'{self.output}/metrics_traj.txt'
                 with open(out_path, 'a') as fp:
                     fp.write(result.pretty_str())
                 trans_init = result.np_arrays['alignment_transformation_sim3']
 
             if self.meshing_finished > 0 and (not self.only_tracking):
-                self.mesher(the_end=True, estimate_c2w_list=estimate_c2w_list, gt_c2w_list=gt_c2w_list, trans_init=trans_init)
+                self.mesher(the_end=True, estimate_c2w_list=estimate_c2w_list, gt_c2w_list=gt_c2w_list,
+                            trans_init=trans_init)
 
         print("Terminate: Done!")
-
 
     def run(self, stream):
         dont_run = True
@@ -388,5 +386,3 @@ class SLAM:
 
         for p in processes:
             p.join()
-
-

@@ -1,11 +1,12 @@
+import pypose as pp
 import torch
-import lietorch
-from lietorch import SE3
+
 from .factor_graph import FactorGraph
 
 
 class PoseTrajectoryFiller:
     """ This class is used to fill in non-keyframe poses """
+
     def __init__(self, net, video, device='cuda:0'):
 
         # split net modules
@@ -40,19 +41,18 @@ class PoseTrajectoryFiller:
         M = len(timestamps)
 
         ts = self.video.timestamp[:N]
-        Ps = SE3(self.video.poses[:N])
+        Ps = pp.SE3(self.video.poses[:N])
 
         # found the location of current timestamp in keyframe queue
-        t0 = torch.tensor([ts[ts<=t].shape[0] - 1 for t in timestamps])
-        t1 = torch.where(t0 < N-1, t0+1, t0)
+        t0 = torch.tensor([ts[ts <= t].shape[0] - 1 for t in timestamps])
+        t1 = torch.where(t0 < N - 1, t0 + 1, t0)
 
         # time interval between nearby keyframes
         dt = ts[t1] - ts[t0] + 1e-3
-        dP = Ps[t1] * Ps[t0].inv()
+        dP = Ps[t1] @ Ps[t0].Inv()
 
-        v = dP.log() / dt.unsqueeze(dim=-1)
-        w = v * (tt - ts[t0]).unsqueeze(dim=-1)
-        Gs = SE3.exp(w) * Ps[t0]
+        w = pp.se3(dP.Log() * ((tt - ts[t0]) / dt)[..., None])
+        Gs = w.Exp() @ Ps[t0]
 
         # extract features (no need for context features)
         inputs = inputs.sub_(self.MEAN).div_(self.STDV)
@@ -60,17 +60,17 @@ class PoseTrajectoryFiller:
 
         # temporally put the non-keyframe at the end of keyframe queue
         self.video.counter.value += M
-        self.video[N:N+M] = (tt, images[:, 0], Gs.data, 1, depths, intrinsics / 8.0, fmap)
+        self.video[N:N + M] = (tt, images[:, 0], Gs.tensor(), 1, depths, intrinsics / 8.0, fmap)
 
         graph = FactorGraph(self.video, self.update)
         # build edge between current frame and nearby keyframes for optimization
-        graph.add_factors(t0.cuda(), torch.arange(N, N+M).cuda())
-        graph.add_factors(t1.cuda(), torch.arange(N, N+M).cuda())
+        graph.add_factors(t0.cuda(), torch.arange(N, N + M).cuda())
+        graph.add_factors(t1.cuda(), torch.arange(N, N + M).cuda())
 
         for itr in range(6):
-            graph.update(N, N+M, motion_only=True)
+            graph.update(N, N + M, motion_only=True)
 
-        Gs = SE3(self.video.poses[N:N+M].clone())
+        Gs = pp.SE3(self.video.poses[N:N + M].clone())
         self.video.counter.value -= M
 
         return [Gs]
@@ -104,4 +104,4 @@ class PoseTrajectoryFiller:
             pose_list += self.__fill(timestamps, images, depths, intrinsics)
 
         # stitch pose segments together
-        return lietorch.cat(pose_list, dim=0)
+        return torch.cat(pose_list, dim=0)

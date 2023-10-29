@@ -1,15 +1,16 @@
-import os
 import copy
+import matplotlib.pyplot as plt
 import numpy as np
 import open3d as o3d
+import os
+import pypose as pp
+import pyrender
 import torch
 import torch.nn.functional as F
 import trimesh
-import matplotlib.pyplot as plt
-import pyrender
 from copy import deepcopy
 from scipy.spatial import cKDTree as KDTree
-from lietorch import SE3
+
 from .oriented_bounding_box import OrientedBoundingBox
 
 
@@ -75,7 +76,7 @@ class Mesher(object):
 
         """
         H, W, fx, fy, cx, cy = self.H, self.W, self.fx, self.fy, self.cx, self.cy
-        device =self.device
+        device = self.device
         if not isinstance(input_points, torch.Tensor):
             input_points = torch.from_numpy(input_points)
         input_points = input_points.clone().detach().float()
@@ -106,8 +107,8 @@ class Mesher(object):
                 u, v = uv[:, 0, 0].float(), uv[:, 1, 0].float()
                 z = z[:, 0, 0].float()
 
-                in_frustum = (u >= 0) & (u <= W-1) & (v >= 0) & (v <= H-1) & (z > 0)
-                forecast_frustum = (u >= -r) & (u <= W-1+r) & (v >= -r) & (v <= H-1+r) & (z > 0)
+                in_frustum = (u >= 0) & (u <= W - 1) & (v >= 0) & (v <= H - 1) & (z > 0)
+                forecast_frustum = (u >= -r) & (u <= W - 1 + r) & (v >= -r) & (v <= H - 1 + r) & (z > 0)
 
                 depth = depth.reshape(1, 1, H, W)
                 vgrid = uv.reshape(1, 1, -1, 2)
@@ -118,7 +119,8 @@ class Mesher(object):
                 depth_sample = F.grid_sample(depth, vgrid, padding_mode='border', align_corners=True)
                 depth_sample = depth_sample.reshape(-1)
                 is_front_face = torch.where((depth_sample > 0.0), (z < (depth_sample + eps)), torch.ones_like(z).bool())
-                is_forecast_face = torch.where((depth_sample > 0.0), (z < (depth_sample + eps)), torch.ones_like(z).bool())
+                is_forecast_face = torch.where((depth_sample > 0.0), (z < (depth_sample + eps)),
+                                               torch.ones_like(z).bool())
                 in_frustum = in_frustum & is_front_face
 
                 valid = valid | in_frustum.bool()
@@ -134,7 +136,6 @@ class Mesher(object):
         forecast_mask = np.concatenate(forecast_mask, axis=0)
 
         return mask, forecast_mask
-
 
     @torch.no_grad()
     def get_connected_mesh(self, mesh, get_largest_components=False):
@@ -178,7 +179,7 @@ class Mesher(object):
                     bound_mask = np.all(vertices >= (bound[:, 0] - eps), axis=1) & \
                                  np.all(vertices <= (bound[:, 1] + eps), axis=1)
                 else:
-                    bound_mask = bound.in_bound(np.array(vertices)) # N'
+                    bound_mask = bound.in_bound(np.array(vertices))  # N'
                 face_mask = bound_mask[mesh.faces].all(axis=1)
                 mesh.update_faces(face_mask)
                 mesh.remove_unreferenced_vertices()
@@ -246,9 +247,9 @@ class Mesher(object):
         """
         net = copy.deepcopy(self.shared_mapping_net).to(self.device)
         cur_idx = self.video.counter.value
-        timestamp = self.video.timestamp[cur_idx-1]
+        timestamp = self.video.timestamp[cur_idx - 1]
         aabb = None
-        kf_c2w_list = SE3(self.video.poses.detach()[:cur_idx]).inv().matrix().data.cpu()
+        kf_c2w_list = pp.SE3(self.video.poses.detach()[:cur_idx]).Inv().matrix().cpu()
 
         if the_end:
             import droid_backends
@@ -261,9 +262,9 @@ class Mesher(object):
             disps = torch.index_select(self.video.disps_up.detach(), dim=0, index=dirty_index)
             common_intrinsic_id = 0  # we assume the intrinsics are the same within one scene
             intrinsic = self.video.intrinsics[common_intrinsic_id].detach() * self.video.scale_factor
-            w2w = SE3(self.video.pose_compensate[0].clone().unsqueeze(dim=0)).to(self.device)
+            w2w = pp.SE3(self.video.pose_compensate[0].clone().unsqueeze(dim=0)).to(self.device)
 
-            points = droid_backends.iproj((w2w * SE3(poses).inv()).data, disps, intrinsic).cpu() # [b, h, w 3]
+            points = droid_backends.iproj((w2w * pp.SE3(poses).Inv()).tensor(), disps, intrinsic).cpu()  # [b, h, w 3]
             thresh = filter_thresh * torch.ones_like(disps.mean(dim=[1, 2]))
             count = droid_backends.depth_filter(
                 poses, disps, intrinsic, dirty_index, thresh
@@ -278,8 +279,7 @@ class Mesher(object):
             aabb = OrientedBoundingBox()
             aabb.compute_from_pointcloud(sel_points.detach().cpu().numpy(), extend=0.1)
 
-        return timestamp, cur_idx-1, net, aabb, kf_c2w_list
-
+        return timestamp, cur_idx - 1, net, aabb, kf_c2w_list
 
     def __call__(self, the_end=False, estimate_c2w_list=None, gt_c2w_list=None, trans_init=None):
         if self.reload_map > 0 or the_end:
@@ -311,14 +311,14 @@ class Mesher(object):
                 if os.path.exists(self.gt_mesh_path) and self.gt_mesh_path.find('.ply') > -1:
                     gt_mesh = trimesh.load_mesh(self.gt_mesh_path, process=False)
 
-                    aligned_mesh, transformation = align_mesh(cull_mesh, gt_mesh, threshold=0.1, trans_init=trans_init, return_transformation=True)
+                    aligned_mesh, transformation = align_mesh(cull_mesh, gt_mesh, threshold=0.1, trans_init=trans_init,
+                                                              return_transformation=True)
                     aligned_mesh.export(f'{self.output}/mesh/aligned_mesh.ply')
 
                     forecast_mesh.apply_transform(transformation)
                     forecast_mesh.export(f'{self.output}/mesh/forecast_aligned_mesh.ply')
 
                     if self.eval_rec:
-
                         eval_mesh(
                             forecast_mesh, gt_mesh,
                             N3d=self.n_points_to_eval,
@@ -361,7 +361,7 @@ def draw_mesh_error(est_mesh, gt_mesh, out_path=None, cmap='jet', display=False,
     if error_type == 'accuracy':
         src_pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.array(est_mesh.vertices)))
         target_pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.array(gt_mesh.vertices)))
-    else: #  'completion'
+    else:  # 'completion'
         src_pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.array(gt_mesh.vertices)))
         target_pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.array(est_mesh.vertices)))
 
@@ -371,12 +371,13 @@ def draw_mesh_error(est_mesh, gt_mesh, out_path=None, cmap='jet', display=False,
 
     color = np.zeros_like(dists)
     breakpoints = np.array([0.0, 0.02, 0.05, 0.10, 0.20, np.max(dists)])
-    bins =        np.array([0.0, 0.25, 0.38, 0.66, 0.83, 1.00])
+    bins = np.array([0.0, 0.25, 0.38, 0.66, 0.83, 1.00])
     for i in range(1, len(breakpoints)):
-        mask = (dists > breakpoints[i-1]) & (dists <= breakpoints[i])
+        mask = (dists > breakpoints[i - 1]) & (dists <= breakpoints[i])
         if np.sum(mask) >= 1.0:
-            scale = bins[i] - bins[i-1]
-            color[mask] = (dists[mask] - breakpoints[i-1]) / (breakpoints[i] - breakpoints[i-1] + 1e-7) * scale + bins[i-1]
+            scale = bins[i] - bins[i - 1]
+            color[mask] = (dists[mask] - breakpoints[i - 1]) / (breakpoints[i] - breakpoints[i - 1] + 1e-7) * scale + \
+                          bins[i - 1]
     error_color = plt.cm.get_cmap(cmap)(color)[..., :3]
     src_pc.colors = o3d.utility.Vector3dVector(error_color)
 
@@ -404,7 +405,7 @@ def eval_mesh(est_mesh, gt_mesh, N3d=2e5, dist_th=0.05, out_path=None, metric_2d
     # accuracy
     dist, _ = gt_tree.query(est_pc)
     accuracy = np.mean(dist) * 100  # cm
-    accuracy_ratio = np.mean((dist < dist_th).astype(np.float32)) * 100 # %
+    accuracy_ratio = np.mean((dist < dist_th).astype(np.float32)) * 100  # %
 
     f_score = (2.0 * accuracy_ratio * completion_ratio) / (accuracy_ratio + completion_ratio)
 
@@ -477,4 +478,3 @@ def extract_depth_from_mesh(mesh,
     renderer.delete()
 
     return depths
-

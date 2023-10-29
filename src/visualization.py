@@ -1,24 +1,23 @@
-import torch
-import os
 import cv2
 import droid_backends
 import numpy as np
 import open3d as o3d
-from lietorch import SE3
-
+import os
+import pypose as pp
+import torch
 
 CAM_POINTS = np.array([
-    [ 0,   0,   0],
-    [-1,  -1, 1.5],
-    [ 1,  -1, 1.5],
-    [ 1,   1, 1.5],
-    [-1,   1, 1.5],
+    [0, 0, 0],
+    [-1, -1, 1.5],
+    [1, -1, 1.5],
+    [1, 1, 1.5],
+    [-1, 1, 1.5],
     [-0.5, 1, 1.5],
-    [ 0.5, 1, 1.5],
-    [ 0, 1.2, 1.5]])
+    [0.5, 1, 1.5],
+    [0, 1.2, 1.5]])
 
 CAM_LINES = np.array([
-    [1,2], [2,3], [3,4], [4,1], [1,0], [0,2], [3,0], [0,4], [5,7], [7,6]])
+    [1, 2], [2, 3], [3, 4], [4, 1], [1, 0], [0, 2], [3, 0], [0, 4], [5, 7], [7, 6]])
 
 
 def white_balance(img):
@@ -45,6 +44,7 @@ def create_camera_actor(g, scale=0.05):
 
     return camera_actor
 
+
 def create_point_actor(points, colors):
     """ open3d point cloud from numpy array """
     point_cloud = o3d.geometry.PointCloud()
@@ -52,6 +52,7 @@ def create_point_actor(points, colors):
     point_cloud.colors = o3d.utility.Vector3dVector(colors)
 
     return point_cloud
+
 
 def droid_visualization(video, device='cuda:0', save_root=''):
     """ DROID visualization frontend """
@@ -76,7 +77,7 @@ def droid_visualization(video, device='cuda:0', save_root=''):
             droid_visualization.video.dirty[:droid_visualization.video.counter.value] = True
 
     def decrease_filter(vis):
-        droid_visualization.filter_thresh *= 1/2
+        droid_visualization.filter_thresh *= 1 / 2
         with droid_visualization.video.get_lock():
             droid_visualization.video.dirty[:droid_visualization.video.counter.value] = True
 
@@ -100,7 +101,6 @@ def droid_visualization(video, device='cuda:0', save_root=''):
 
         print(f"Visualization: PointCloud saved to {mesh_out_file}!")
 
-
     def animation_callback(vis):
         cam = vis.get_view_control().convert_to_pinhole_camera_parameters()
 
@@ -121,9 +121,9 @@ def droid_visualization(video, device='cuda:0', save_root=''):
             # convert poses to 4x4 matrix
             poses = torch.index_select(video.poses, dim=0, index=dirty_index)
             disps = torch.index_select(video.disps_up, dim=0, index=dirty_index)
-            Ps = SE3(poses).inv().matrix().cpu().numpy()
+            Ps = pp.SE3(poses).Inv().matrix().cpu().numpy()
 
-            points = droid_backends.iproj(SE3(poses).inv().data, disps, intrinsic).cpu()
+            points = droid_backends.iproj(pp.SE3(poses).Inv().tensor(), disps, intrinsic).cpu()
 
             thresh = droid_visualization.filter_thresh * torch.ones_like(disps.mean(dim=[1, 2]))
 
@@ -203,4 +203,3 @@ def droid_visualization(video, device='cuda:0', save_root=''):
 
     vis.run()
     vis.destroy_window()
-
